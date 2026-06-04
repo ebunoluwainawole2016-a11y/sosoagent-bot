@@ -178,8 +178,7 @@ It does not provide financial advice. Always conduct your own research before ma
 
 🔗 Links
 
-Live Bot: @YourBotUsername
+Live Bot:
+https://t.me/sosoagent_bot
 
-Buildathon Submission: Coming Soon
 
-Developer: Your Name

@@ -45,7 +45,7 @@ cur.execute("""
 """)
 conn.commit()
 
-# ==================== MENUS ====================
+# ==================== MENU ====================
 
 def main_menu():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -90,16 +90,18 @@ async def get_price(symbol: str):
     if not coin:
         return None
 
+    # Try SoSoValue
     data = await soso_api_call(f"/currencies/{coin}/market-snapshot")
     if data and isinstance(data, dict):
         price = data.get("data", {}).get("price") or data.get("price")
         if price:
             return float(price)
 
+    # Fallback CoinGecko
     try:
         url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin}&vs_currencies=usd"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            async with session.get(url) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     return data.get(coin, {}).get("usd")
@@ -109,7 +111,7 @@ async def get_price(symbol: str):
 
 async def get_fear_greed():
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
             async with session.get("https://api.alternative.me/fng/") as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -120,25 +122,41 @@ async def get_fear_greed():
     return None, None
 
 async def get_news():
-    data = await soso_api_call("/news", {"limit": 5})
-    if data and isinstance(data, dict):
-        items = data.get("data") or data.get("items", [])
-        if items:
-            return items[:3]
-
     try:
-        url = "https://min-api.cryptocompare.com/data/v2/news/?lang=EN"
-        async with aiohttp.ClientSession() as session:
+        url = "https://min-api.cryptocompare.com/data/v2/news/?lang=EN&limit=5"
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
             async with session.get(url) as resp:
                 if resp.status == 200:
-                    result = await resp.json()
-                    return result.get("Data", [])[:3]
+                    data = await resp.json()
+                    return data.get("Data", [])[:3]
     except:
         pass
     return []
 
 async def get_etf_data():
-    return await soso_api_call("/etfs/summary-history", {"limit": 5})
+    # Try SoSoValue first
+    data = await soso_api_call("/etfs/summary-history", {"limit": 5})
+    if data:
+        return data
+
+    # CoinGecko + Binance fallback
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            async with session.get("https://api.coingecko.com/api/v3/global") as resp:
+                if resp.status == 200:
+                    return await resp.json()
+    except:
+        pass
+
+    try:
+        # Binance fallback (BTC market snapshot)
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            async with session.get("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT") as resp:
+                if resp.status == 200:
+                    return await resp.json()
+    except:
+        pass
+    return None
 
 # ==================== HANDLERS ====================
 
@@ -146,7 +164,7 @@ async def get_etf_data():
 async def start(message: Message):
     await message.answer(
         "👋 <b>Welcome to SoSoAgent Bot!</b> 🚀\n\n"
-        "Tap the buttons below:",
+        "Your On-Chain Finance Co-Pilot",
         reply_markup=main_menu()
     )
 
@@ -160,9 +178,51 @@ async def prices(callback):
     text = "<b>💰 Live Prices</b>\n\n"
     for symbol in ["BTC", "ETH", "SOL"]:
         price = await get_price(symbol)
-        text += f"<b>{symbol}</b>: ${price:,.2f if price else 'N/A'}\n"
+        if price:
+            text += f"<b>{symbol}</b>: ${price:,.2f}\n"
+        else:
+            text += f"<b>{symbol}</b>: N/A\n"
     await callback.message.edit_text(text, reply_markup=main_menu())
     await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "portfolio")
+async def portfolio(callback):
+    cur.execute("SELECT coin, amount FROM portfolio WHERE user_id=?", (callback.from_user.id,))
+    rows = cur.fetchall()
+    if not rows:
+        text = "📭 <b>Portfolio is empty</b>\n\nTap below to add holdings"
+        await callback.message.edit_text(text, reply_markup=portfolio_add_menu())
+    else:
+        total = 0
+        text = "<b>📈 My Portfolio</b>\n\n"
+        for coin, amount in rows:
+            price = await get_price(coin)
+            if price:
+                value = price * amount
+                total += value
+                text += f"🪙 <b>{coin}</b>\nAmount: {amount}\nValue: <b>${value:,.2f}</b>\n\n"
+        text += f"💰 <b>Total Value: ${total:,.2f}</b>"
+        await callback.message.edit_text(text, reply_markup=portfolio_add_menu())
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("addp_"))
+async def add_to_portfolio(callback):
+    try:
+        _, coin, amount_str = callback.data.split("_")
+        amount = float(amount_str)
+        uid = callback.from_user.id
+
+        cur.execute("""
+            INSERT INTO portfolio (user_id, coin, amount)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, coin) DO UPDATE SET amount = amount + ?
+        """, (uid, coin, amount, amount))
+        conn.commit()
+
+        await callback.answer(f"✅ Added {amount} {coin}")
+        await portfolio(callback)
+    except:
+        await callback.answer("Error")
 
 @dp.callback_query(lambda c: c.data == "market")
 async def market(callback):
@@ -189,65 +249,45 @@ async def news(callback):
     if articles:
         text = "<b>📰 Latest News</b>\n\n"
         for a in articles:
-            title = a.get("title", "News")[:80]
+            title = a.get("title", "News")[:90]
             url = a.get("url", "")
             text += f"• <b>{title}</b>\n{url}\n\n"
     else:
-        text = "❌ No news available."
+        text = "❌ Could not load news right now."
     await callback.message.edit_text(text, reply_markup=main_menu())
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "etf")
 async def etf(callback):
     data = await get_etf_data()
+    text = "<b>📈 ETF Flows</b>\n\n"
     if data:
-        text = "<b>📈 ETF Flows</b>\n\n" + str(data)[:500]
+        text += str(data)[:700]
     else:
-        text = "📊 <b>ETF Flows</b>\n\nSoSoValue ETF data is loading..."
+        text += "ETF data is currently being loaded..."
     await callback.message.edit_text(text, reply_markup=main_menu())
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data == "portfolio")
-async def portfolio(callback):
-    cur.execute("SELECT coin, amount FROM portfolio WHERE user_id=?", (callback.from_user.id,))
-    rows = cur.fetchall()
-    if not rows:
-        text = "📭 <b>Portfolio empty</b>\n\nTap below to add holdings"
-        await callback.message.edit_text(text, reply_markup=portfolio_add_menu())
-    else:
-        total = 0
-        text = "<b>📈 My Portfolio</b>\n\n"
-        for coin, amount in rows:
-            price = await get_price(coin)
-            if price:
-                value = price * amount
-                total += value
-                text += f"🪙 <b>{coin}</b>\nAmount: {amount}\nValue: <b>${value:,.2f}</b>\n\n"
-        text += f"💰 <b>Total: ${total:,.2f}</b>"
-        await callback.message.edit_text(text, reply_markup=portfolio_add_menu())
-    await callback.answer()
-
-@dp.callback_query(lambda c: c.data.startswith("addp_"))
-async def add_to_portfolio(callback):
+@dp.message(Command("add"))
+async def add_cmd(message: Message):
     try:
-        _, coin, amount_str = callback.data.split("_")
+        _, coin, amount_str = message.text.split()
+        coin = coin.upper()
         amount = float(amount_str)
-        uid = callback.from_user.id
 
         cur.execute("""
             INSERT INTO portfolio (user_id, coin, amount)
             VALUES (?, ?, ?)
             ON CONFLICT(user_id, coin) DO UPDATE SET amount = amount + ?
-        """, (uid, coin, amount, amount))
+        """, (message.from_user.id, coin, amount, amount))
         conn.commit()
 
-        await callback.answer(f"✅ Added {amount} {coin}")
-        await portfolio(callback)  # Refresh portfolio view
+        await message.answer(f"✅ Added {amount} {coin}")
     except:
-        await callback.answer("Error adding")
+        await message.answer("Usage: <code>/add BTC 0.5</code>")
 
 async def main():
-    print("🚀 SoSoAgent Bot — Fully Button-Driven!")
+    print("🚀 SoSoAgent Bot is running!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

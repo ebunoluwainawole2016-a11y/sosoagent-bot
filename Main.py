@@ -29,7 +29,8 @@ dp = Dispatcher()
 
 COIN_MAP = {
     "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
-    "BNB": "binancecoin", "XRP": "ripple"
+    "BNB": "binancecoin", "XRP": "ripple", "ADA": "cardano",
+    "DOGE": "dogecoin", "AVAX": "avalanche-2"
 }
 
 # Database
@@ -62,6 +63,7 @@ def main_menu():
         [InlineKeyboardButton(text="📈 ETF Flows", callback_data="etf")],
         [InlineKeyboardButton(text="📈 Portfolio", callback_data="portfolio")],
         [InlineKeyboardButton(text="⭐ Watchlist", callback_data="watchlist")],
+        [InlineKeyboardButton(text="🤖 Paper Trade", callback_data="trade")],
         [InlineKeyboardButton(text="🔄 Refresh", callback_data="menu")]
     ])
 
@@ -72,6 +74,8 @@ def watchlist_menu():
         [InlineKeyboardButton(text="➕ SOL", callback_data="add_watch_SOL"),
          InlineKeyboardButton(text="➕ XRP", callback_data="add_watch_XRP")],
         [InlineKeyboardButton(text="➕ BNB", callback_data="add_watch_BNB"),
+         InlineKeyboardButton(text="➕ ADA", callback_data="add_watch_ADA")],
+        [InlineKeyboardButton(text="➕ DOGE", callback_data="add_watch_DOGE"),
          InlineKeyboardButton(text="← Back", callback_data="menu")]
     ])
 
@@ -113,12 +117,9 @@ async def get_price(symbol):
     except:
         pass
 
-    # Binance fallback
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as session:
-            async with session.get(
-                f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT"
-            ) as resp:
+            async with session.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT") as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     return float(data["price"])
@@ -134,8 +135,8 @@ async def get_fear_greed():
                     data = await resp.json()
                     item = data["data"][0]
                     return item["value"], item["value_classification"]
-    except Exception as e:
-        print("Fear & Greed Error:", e)
+    except:
+        pass
     return None, None
 
 async def get_news():
@@ -154,8 +155,8 @@ async def get_news():
                 if resp.status == 200:
                     result = await resp.json()
                     return [{"title": item.get("title"), "url": item.get("url")} for item in result.get("Data", [])[:5]]
-    except Exception as e:
-        print("News Error:", e)
+    except:
+        pass
     return [{"title": "Visit CoinDesk for latest crypto updates", "url": "https://www.coindesk.com/"}]
 
 async def get_etf_data():
@@ -194,7 +195,7 @@ async def show_menu(callback):
 @dp.callback_query(lambda c: c.data == "prices")
 async def prices(callback):
     text = "<b>💰 Live Prices</b>\n\n"
-    for symbol in ["BTC", "ETH", "SOL", "XRP", "BNB"]:
+    for symbol in ["BTC", "ETH", "SOL", "XRP", "BNB", "ADA", "DOGE", "AVAX"]:
         price = await get_price(symbol)
         if price:
             text += f"<b>{symbol}</b>: ${price:,.2f}\n"
@@ -203,57 +204,23 @@ async def prices(callback):
     await callback.message.edit_text(text, reply_markup=main_menu())
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data == "market")
-async def market(callback):
-    btc = await get_price("BTC")
-    value, label = await get_fear_greed()
-    text = "<b>📊 Market Summary</b>\n\n"
-    if btc:
-        text += f"BTC: ${btc:,.2f}\n"
-    if value:
-        text += f"Fear & Greed: {value} ({label})"
-    await callback.message.edit_text(text, reply_markup=main_menu())
-    await callback.answer()
-
-@dp.callback_query(lambda c: c.data == "fear")
-async def fear(callback):
-    value, label = await get_fear_greed()
-    text = f"<b>😨 Fear & Greed</b>\n{value} — {label}" if value else "❌ Unavailable right now."
-    await callback.message.edit_text(text, reply_markup=main_menu())
-    await callback.answer()
-
-@dp.callback_query(lambda c: c.data == "news")
-async def news(callback):
-    articles = await get_news()
-    if not articles:
-        text = "❌ No news available right now."
-    else:
-        text = "<b>📰 Latest Crypto News</b>\n\n"
-        for article in articles:
-            title = escape(article.get("title", "News"))[:80]
-            url = article.get("url", "")
-            text += f"• <b>{title}</b>\n{url}\n\n"
-    await callback.message.edit_text(text, reply_markup=main_menu(), disable_web_page_preview=True)
-    await callback.answer()
-
 @dp.callback_query(lambda c: c.data == "etf")
 async def etf(callback):
     data = await get_etf_data()
     text = "<b>📈 ETF & Market Overview</b>\n\n"
-    if not data:
-        text += "ETF data unavailable."
-    elif data.get("source") == "coingecko":
-        market_cap = data.get("market_cap")
-        btc_dom = data.get("btc_dom")
-        if market_cap:
-            text += f"🌍 Global Market Cap: <b>${market_cap:,.0f}</b>\n"
-        if btc_dom is not None:
-            text += f"₿ BTC Dominance: <b>{btc_dom:.2f}%</b>\n"
-        text += "\nUsing CoinGecko public data"
-    elif data.get("source") == "soso":
-        raw = data.get("data", {})
-        text += "<b>Live ETF Data</b>\n\n"
-        text += f"<code>{str(raw)[:3000]}</code>"
+    if data:
+        if data.get("source") == "coingecko":
+            market_cap = data.get("market_cap")
+            btc_dom = data.get("btc_dom")
+            if market_cap:
+                text += f"🌍 Global Market Cap: <b>${market_cap:,.0f}</b>\n"
+            if btc_dom is not None:
+                text += f"₿ BTC Dominance: <b>{btc_dom:.2f}%</b>\n"
+            text += "\nUsing CoinGecko public data"
+        else:
+            text += "SoSoValue ETF data received."
+    else:
+        text += "ETF data is currently unavailable."
     await callback.message.edit_text(text, reply_markup=main_menu())
     await callback.answer()
 
@@ -303,6 +270,70 @@ async def add_watch_button(callback):
     conn.commit()
     await callback.answer(f"⭐ {coin} added")
     await watchlist(callback)
+
+@dp.message(Command("add"))
+async def add_cmd(message: Message):
+    try:
+        _, coin, amount_str = message.text.split()
+        coin = coin.upper()
+        amount = float(amount_str)
+        cur.execute("""
+            INSERT INTO portfolio (user_id, coin, amount)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, coin) DO UPDATE SET amount = amount + ?
+        """, (message.from_user.id, coin, amount, amount))
+        conn.commit()
+        await message.answer(f"✅ Added {amount} {coin}")
+    except:
+        await message.answer("Usage:\n<code>/add BTC 0.5</code>")
+
+# Simulated Paper Trading
+@dp.callback_query(lambda c: c.data == "trade")
+async def trade_menu(callback):
+    text = "<b>🤖 Paper Trading Simulator</b>\n\n"
+    text += "Commands:\n"
+    text += "<code>/buy BTC 0.1</code>\n"
+    text += "<code>/sell BTC 0.05</code>\n"
+    text += "\nTrades are simulated."
+    await callback.message.edit_text(text, reply_markup=main_menu())
+    await callback.answer()
+
+@dp.message(Command("buy"))
+async def buy_cmd(message: Message):
+    try:
+        _, coin, amount_str = message.text.split()
+        coin = coin.upper()
+        amount = float(amount_str)
+        price = await get_price(coin)
+        if not price:
+            await message.answer("❌ Price unavailable.")
+            return
+        cur.execute("""
+            INSERT INTO portfolio (user_id, coin, amount)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, coin) DO UPDATE SET amount = amount + ?
+        """, (message.from_user.id, coin, amount, amount))
+        conn.commit()
+        await message.answer(f"✅ Simulated BUY: {amount} {coin} @ \~${price:,.2f}")
+    except:
+        await message.answer("Usage:\n<code>/buy BTC 0.1</code>")
+
+@dp.message(Command("sell"))
+async def sell_cmd(message: Message):
+    try:
+        _, coin, amount_str = message.text.split()
+        coin = coin.upper()
+        amount = float(amount_str)
+        cur.execute("SELECT amount FROM portfolio WHERE user_id=? AND coin=?", (message.from_user.id, coin))
+        row = cur.fetchone()
+        if not row or row[0] < amount:
+            await message.answer("❌ Not enough balance.")
+            return
+        cur.execute("UPDATE portfolio SET amount = amount - ? WHERE user_id=? AND coin=?", (amount, message.from_user.id, coin))
+        conn.commit()
+        await message.answer(f"✅ Simulated SELL: {amount} {coin}")
+    except:
+        await message.answer("Usage:\n<code>/sell BTC 0.05</code>")
 
 async def main():
     print("🚀 Starting SoSoAgent Bot...")

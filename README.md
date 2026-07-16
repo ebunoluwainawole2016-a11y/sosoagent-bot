@@ -136,7 +136,7 @@ Wave 2 – Enhanced Intelligence ✅
 - Improved User Experience
 - Production Deployment
 
-Wave 3 – Planned Features
+Wave 3 – Already Archived 
 
 - Price Alerts
 - Watchlists
@@ -144,7 +144,7 @@ Wave 3 – Planned Features
 - Solana Wallet Tracking
 - Portfolio Analytics
 
-Wave 4 – Advanced Intelligence
+Wave 4 – Advanced Intelligence Archived 
 
 - Personalized Insights
 - AI Market Summaries
